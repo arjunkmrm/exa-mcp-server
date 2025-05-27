@@ -32,8 +32,12 @@ RUN npm ci --production --ignore-scripts
 # Set environment variable for the Exa API key
 ENV EXA_API_KEY=your-api-key-here
 
-# Expose the port the app runs on
-EXPOSE 3000
+# Set default port for HTTP transport
+ENV PORT=8081
 
-# Run the application
-ENTRYPOINT ["node", "build/index.js"]
+# Expose the port the app runs on (8081 is the default for HTTP transport)
+EXPOSE 8081
+
+# Default to HTTP transport for containerized deployment
+# Users can override with: docker run -it image-name --transport stdio
+ENTRYPOINT ["node", "build/index.js", "--transport", "http"]
