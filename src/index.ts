@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createStatelessServer } from "@smithery/sdk/server/stateless.js";
 import dotenv from "dotenv";
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
@@ -22,6 +23,17 @@ const argv = yargs(hideBin(process.argv))
     type: 'boolean',
     description: 'List all available tools and exit',
     default: false
+  })
+  .option('transport', {
+    type: 'string',
+    description: 'Transport type: stdio (default) or http',
+    default: 'stdio',
+    choices: ['stdio', 'http']
+  })
+  .option('port', {
+    type: 'number',
+    description: 'Port to run the HTTP server on (only used with http transport)',
+    default: 8081
   })
   .help()
   .argv;
@@ -66,73 +78,111 @@ if (!API_KEY) {
  * - And more to come!
  */
 
-class ExaServer {
-  private server: McpServer;
-
-  constructor() {
-    this.server = new McpServer({
-      name: "exa-search-server",
-      version: "0.3.10"
-    });
+function setupTools(server: McpServer): string[] {
+  // Register tools based on specifications
+  const registeredTools: string[] = [];
+  
+  Object.entries(toolRegistry).forEach(([toolId, tool]) => {
+    // If specific tools were provided, only enable those.
+    // Otherwise, enable all tools marked as enabled by default
+    const shouldRegister = specifiedTools.size > 0 
+      ? specifiedTools.has(toolId) 
+      : tool.enabled;
     
-    log("Server initialized");
-  }
-
-  private setupTools(): string[] {
-    // Register tools based on specifications
-    const registeredTools: string[] = [];
-    
-    Object.entries(toolRegistry).forEach(([toolId, tool]) => {
-      // If specific tools were provided, only enable those.
-      // Otherwise, enable all tools marked as enabled by default
-      const shouldRegister = specifiedTools.size > 0 
-        ? specifiedTools.has(toolId) 
-        : tool.enabled;
-      
-      if (shouldRegister) {
-        this.server.tool(
-          tool.name,
-          tool.description,
-          tool.schema,
-          tool.handler
-        );
-        registeredTools.push(toolId);
-      }
-    });
-    
-    return registeredTools;
-  }
-
-  async run(): Promise<void> {
-    try {
-      // Set up tools before connecting
-      const registeredTools = this.setupTools();
-      
-      log(`Starting Exa MCP server with ${registeredTools.length} tools: ${registeredTools.join(', ')}`);
-      
-      const transport = new StdioServerTransport();
-      
-      // Handle connection errors
-      transport.onerror = (error) => {
-        log(`Transport error: ${error.message}`);
-      };
-      
-      await this.server.connect(transport);
-      log("Exa Search MCP server running on stdio");
-    } catch (error) {
-      log(`Server initialization error: ${error instanceof Error ? error.message : String(error)}`);
-      throw error;
+    if (shouldRegister) {
+      server.tool(
+        tool.name,
+        tool.description,
+        tool.schema,
+        tool.handler
+      );
+      registeredTools.push(toolId);
     }
-  }
+  });
+  
+  return registeredTools;
 }
 
-// Create and run the server with proper error handling
-(async () => {
-  try {
-    const server = new ExaServer();
-    await server.run();
-  } catch (error) {
-    log(`Fatal server error: ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
+// For HTTP transport using Smithery SDK
+if (argvObj.transport === 'http') {
+  const { app } = createStatelessServer<{
+    exaApiKey: string
+  }>(({ config }: { config: { exaApiKey: string } }) => {
+    try {
+      log("Starting Exa MCP Server in HTTP mode...");
+      
+      // Create a new MCP server
+      const server = new McpServer({
+        name: "exa-search-server",
+        version: "0.3.10"
+      });
+      
+      // Set up tools
+      const registeredTools = setupTools(server);
+      log(`Registered ${registeredTools.length} tools: ${registeredTools.join(', ')}`);
+      
+      return server.server;
+    } catch (e) {
+      log(`Server initialization error: ${e instanceof Error ? e.message : String(e)}`);
+      throw e;
+    }
+  });
+  
+  // Start the HTTP server
+  const PORT = argvObj.port || process.env.PORT || 8081;
+  app.listen(PORT, () => {
+    log(`Exa MCP server running on http://localhost:${PORT}`);
+  });
+  
+} else {
+  // Original stdio transport
+  class ExaServer {
+    private server: McpServer;
+
+    constructor() {
+      this.server = new McpServer({
+        name: "exa-search-server",
+        version: "0.3.10"
+      });
+      
+      log("Server initialized");
+    }
+
+    private setupTools(): string[] {
+      return setupTools(this.server);
+    }
+
+    async run(): Promise<void> {
+      try {
+        // Set up tools before connecting
+        const registeredTools = this.setupTools();
+        
+        log(`Starting Exa MCP server with ${registeredTools.length} tools: ${registeredTools.join(', ')}`);
+        
+        const transport = new StdioServerTransport();
+        
+        // Handle connection errors
+        transport.onerror = (error) => {
+          log(`Transport error: ${error.message}`);
+        };
+        
+        await this.server.connect(transport);
+        log("Exa Search MCP server running on stdio");
+      } catch (error) {
+        log(`Server initialization error: ${error instanceof Error ? error.message : String(error)}`);
+        throw error;
+      }
+    }
   }
-})();
+
+  // Create and run the server with proper error handling
+  (async () => {
+    try {
+      const server = new ExaServer();
+      await server.run();
+    } catch (error) {
+      log(`Fatal server error: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  })();
+}
