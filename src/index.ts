@@ -83,11 +83,12 @@ function setupTools(server: McpServer): string[] {
   const registeredTools: string[] = [];
   
   Object.entries(toolRegistry).forEach(([toolId, tool]) => {
-    // If specific tools were provided, only enable those.
-    // Otherwise, enable all tools marked as enabled by default
+    // If specific tools were provided via CLI, only enable those
+    // Otherwise, for HTTP transport, enable ALL tools
+    // For stdio transport, use the default enabled status
     const shouldRegister = specifiedTools.size > 0 
       ? specifiedTools.has(toolId) 
-      : tool.enabled;
+      : (argvObj.transport === 'http' ? true : tool.enabled);
     
     if (shouldRegister) {
       server.tool(
